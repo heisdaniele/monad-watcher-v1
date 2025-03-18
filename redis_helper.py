@@ -6,17 +6,23 @@ class TransactionCache:
     def __init__(self):
         self.redis = None
         self.ttl = REDIS_TTL
+        self.max_retries = 5
+        self.initial_retry_delay = 1
         self.connect_with_retry()
 
-    def connect_with_retry(self, max_retries=5):
-        """Attempt to connect to Redis with retries"""
+    def connect_with_retry(self):
+        """Attempt to connect to Redis with exponential backoff"""
         retry_count = 0
-        while not self.redis and retry_count < max_retries:
+        retry_delay = self.initial_retry_delay
+
+        while not self.redis and retry_count < self.max_retries:
             try:
+                print(f"🔄 Connecting to Redis at {REDIS_HOST}:{REDIS_PORT}")
                 self.redis = redis.Redis(
                     host=REDIS_HOST,
                     port=REDIS_PORT,
                     socket_timeout=5,
+                    socket_connect_timeout=5,
                     retry_on_timeout=True,
                     decode_responses=True,
                     health_check_interval=30
@@ -24,11 +30,15 @@ class TransactionCache:
                 # Test connection
                 self.redis.ping()
                 print("✅ Connected to Redis successfully")
-            except redis.ConnectionError:
+                return True
+            except redis.ConnectionError as e:
                 retry_count += 1
-                print(f"⚠️ Redis connection attempt {retry_count}/{max_retries} failed")
-                time.sleep(2)
+                print(f"⚠️ Redis connection attempt {retry_count}/{self.max_retries} failed: {str(e)}")
+                if retry_count < self.max_retries:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
                 self.redis = None
+        return False
 
     async def is_processed(self, tx_hash: str) -> bool:
         """Check if transaction has been processed"""
