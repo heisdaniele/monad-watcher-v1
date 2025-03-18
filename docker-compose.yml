@@ -1,0 +1,31 @@
+version: '3.8'
+services:
+  blockchain-listener:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: monad-watcher-v1
+    environment:
+      - NODE_URL=${NODE_URL}
+      - TRANSFER_THRESHOLD=${TRANSFER_THRESHOLD}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_TTL=86400
+    depends_on:
+      - redis
+    restart: unless-stopped
+    
+  redis:
+    image: redis:alpine
+    container_name: monad-watcher-v1-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+    name: monad-watcher-v1-redis-data

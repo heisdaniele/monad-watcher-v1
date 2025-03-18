@@ -2,6 +2,7 @@ import asyncio
 from web3 import Web3
 from supabase import create_client
 from config import NODE_URL, TRANSFER_THRESHOLD, SUPABASE_URL, SUPABASE_SERVICE_KEY
+from redis_helper import TransactionCache
 
 # Initialize Supabase client
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
@@ -15,9 +16,13 @@ processed_tx_hashes = set()
 # Define token conversion: 1 MON = 10^18 units.
 MON_DECIMALS = 10 ** 18
 
+# Initialize cache
+tx_cache = TransactionCache()
+
 async def send_to_supabase(tx_data):
     """
-    Sends a transaction record to Supabase's 'transfers' table.
+    Sends a transaction record to Supabase's 'transfers' table using upsert.
+    If the transaction already exists (same tx_hash), it will be skipped.
     """
     try:
         formatted_data = {
@@ -27,11 +32,16 @@ async def send_to_supabase(tx_data):
             "amount": float(tx_data["amount"]),
             "block_number": tx_data["blockNumber"]
         }
-        # Insert data into Supabase
-        response = supabase.table('transfers').insert(formatted_data).execute()
-        print(f"✅ Transaction saved: {tx_data['tx_hash'][:10]}... ({tx_data['amount']} MON)")
+        # Upsert data into Supabase (insert if not exists)
+        response = (supabase.table('transfers')
+                   .upsert(formatted_data, 
+                          on_conflict='tx_hash',  # Primary key
+                          ignore_duplicates=True)
+                   .execute())
+        
+        print(f"✅ Transaction processed: {tx_data['tx_hash'][:10]}... ({tx_data['amount']} MON)")
     except Exception as e:
-        print(f"❌ Failed to save transaction: {e}")
+        print(f"❌ Failed to process transaction: {e}")
         print(f"Response details: {getattr(e, 'response', 'No response details')}")
 
 async def listen_to_blocks():
