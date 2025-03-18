@@ -20,6 +20,10 @@ w3 = Web3(Web3.LegacyWebSocketProvider(
     }
 ))
 
+# Rate limiting settings
+REQUESTS_PER_SECOND = 20  # Keep below 25/s limit
+REQUEST_COOLDOWN = 1 / REQUESTS_PER_SECOND  # Time between requests
+
 # Set to track processed transactions to avoid duplicates.
 processed_tx_hashes = set()
 
@@ -52,25 +56,32 @@ async def send_to_supabase(tx_data):
         print(f"Response details: {getattr(e, 'response', 'No response details')}")
 
 async def process_block(block_number):
-    """Process a single block by getting individual transactions"""
+    """Process a single block with rate limiting"""
     try:
-        # Get only block header first
-        block = w3.eth.get_block(block_number, full_transactions=False)
         print(f"📦 Processing block: {block_number}")
         
-        # Process transactions one by one
+        # Get block with just transaction hashes first
+        block = w3.eth.get_block(block_number, full_transactions=False)
+        await asyncio.sleep(REQUEST_COOLDOWN)  # Rate limiting
+        
+        # Process transactions one by one with rate limiting
         for tx_hash in block.transactions:
             try:
-                # Get individual transaction
+                await asyncio.sleep(REQUEST_COOLDOWN)  # Rate limiting
                 tx = w3.eth.get_transaction(tx_hash)
                 if tx and tx.value and tx.value >= TRANSFER_THRESHOLD:
                     await process_transaction(tx, block_number)
             except Exception as e:
+                if "request limit reached" in str(e):
+                    print(f"🔄 Rate limit hit, cooling down...")
+                    await asyncio.sleep(5)  # Longer cooldown on rate limit
+                    continue
                 print(f"⚠️ Transaction error ({tx_hash.hex()[:10]}...): {str(e)}")
                 continue
                 
     except Exception as e:
         print(f"⚠️ Block processing error: {str(e)}")
+        await asyncio.sleep(1)
 
 async def listen_to_blocks():
     print("🚀 Starting blockchain listener...")
@@ -84,12 +95,16 @@ async def listen_to_blocks():
                 continue
 
             current_block = w3.eth.block_number
+            await asyncio.sleep(REQUEST_COOLDOWN)  # Rate limiting
+            
             while True:
                 try:
+                    await asyncio.sleep(REQUEST_COOLDOWN)  # Rate limiting
                     latest_block = w3.eth.block_number
                     if latest_block > current_block:
                         for block_number in range(current_block + 1, latest_block + 1):
                             await process_block(block_number)
+                            await asyncio.sleep(REQUEST_COOLDOWN)  # Rate limiting
                         current_block = latest_block
                     await asyncio.sleep(1)
                 
