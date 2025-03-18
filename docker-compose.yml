@@ -11,16 +11,4 @@ services:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
     restart: unless-stopped
-    
-  redis:
-    image: redis:alpine
-    container_name: monad-watcher-v1-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-
-volumes:
-  redis_data:
-    name: monad-watcher-v1-redis-data
+   

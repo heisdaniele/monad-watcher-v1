@@ -109,12 +109,8 @@ async def listen_to_blocks():
 async def process_transaction(tx, block_number):
     """Process a single transaction"""
     tx_hash = tx.hash.hex()
-    
-    # Check Redis cache
-    if await tx_cache.is_processed(tx_hash):
-        return
-        
     human_amount = tx.value / MON_DECIMALS
+    
     tx_data = {
         "tx_hash": tx_hash,
         "from_addr": tx["from"],
@@ -125,7 +121,6 @@ async def process_transaction(tx, block_number):
     
     print(f"💰 Large transfer detected: {human_amount:.2f} MON")
     await send_to_supabase(tx_data)
-    await tx_cache.mark_processed(tx_hash)
 
 if __name__ == "__main__":
     asyncio.run(listen_to_blocks())
