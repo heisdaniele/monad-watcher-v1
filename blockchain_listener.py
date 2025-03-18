@@ -3,17 +3,15 @@ from web3 import Web3
 from web3.exceptions import ProviderConnectionError
 from supabase import create_client
 from config import NODE_URL, TRANSFER_THRESHOLD, SUPABASE_URL, SUPABASE_SERVICE_KEY
-from redis_helper import TransactionCache
 
-# Initialize clients
+# Initialize Supabase client
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-tx_cache = TransactionCache()
 
 # Create Web3 instance with optimized settings
 w3 = Web3(Web3.LegacyWebSocketProvider(
     NODE_URL,
     websocket_kwargs={
-        'max_size': 100_000_000,  # Reduced to 100MB
+        'max_size': 100_000_000,  # 100MB
         'ping_interval': 30,
         'ping_timeout': 20,
         'close_timeout': 20
@@ -22,19 +20,13 @@ w3 = Web3(Web3.LegacyWebSocketProvider(
 
 # Rate limiting settings
 REQUESTS_PER_SECOND = 20  # Keep below 25/s limit
-REQUEST_COOLDOWN = 1 / REQUESTS_PER_SECOND  # Time between requests
+REQUEST_COOLDOWN = 1 / REQUESTS_PER_SECOND
 
-# Set to track processed transactions to avoid duplicates.
-processed_tx_hashes = set()
-
-# Define token conversion: 1 MON = 10^18 units.
+# Define token conversion
 MON_DECIMALS = 10 ** 18
 
 async def send_to_supabase(tx_data):
-    """
-    Sends a transaction record to Supabase's 'transfers' table using upsert.
-    If the transaction already exists (same tx_hash), it will be skipped.
-    """
+    """Send transaction to Supabase with upsert for deduplication"""
     try:
         formatted_data = {
             "tx_hash": tx_data["tx_hash"],
@@ -43,17 +35,14 @@ async def send_to_supabase(tx_data):
             "amount": float(tx_data["amount"]),
             "block_number": tx_data["blockNumber"]
         }
-        # Upsert data into Supabase (insert if not exists)
         response = (supabase.table('transfers')
                    .upsert(formatted_data, 
-                          on_conflict='tx_hash',  # Primary key
+                          on_conflict='tx_hash',
                           ignore_duplicates=True)
                    .execute())
-        
         print(f"✅ Transaction processed: {tx_data['tx_hash'][:10]}... ({tx_data['amount']} MON)")
     except Exception as e:
         print(f"❌ Failed to process transaction: {e}")
-        print(f"Response details: {getattr(e, 'response', 'No response details')}")
 
 async def process_block(block_number):
     """Process a single block with rate limiting"""
@@ -118,6 +107,7 @@ async def listen_to_blocks():
             await asyncio.sleep(retry_delay)
 
 async def process_transaction(tx, block_number):
+    """Process a single transaction"""
     tx_hash = tx.hash.hex()
     
     # Check Redis cache
