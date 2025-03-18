@@ -5,17 +5,18 @@ from supabase import create_client
 from config import NODE_URL, TRANSFER_THRESHOLD, SUPABASE_URL, SUPABASE_SERVICE_KEY
 from redis_helper import TransactionCache
 
-# Initialize Supabase client
+# Initialize clients
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+tx_cache = TransactionCache()
 
 # Create Web3 instance with optimized settings
 w3 = Web3(Web3.LegacyWebSocketProvider(
     NODE_URL,
     websocket_kwargs={
-        'max_size': 1_000_000_000,  # 1GB max message size
+        'max_size': 100_000_000,  # Reduced to 100MB
         'ping_interval': 30,
-        'ping_timeout': 10,
-        'close_timeout': 10
+        'ping_timeout': 20,
+        'close_timeout': 20
     }
 ))
 
@@ -24,9 +25,6 @@ processed_tx_hashes = set()
 
 # Define token conversion: 1 MON = 10^18 units.
 MON_DECIMALS = 10 ** 18
-
-# Initialize cache
-tx_cache = TransactionCache()
 
 async def send_to_supabase(tx_data):
     """
@@ -53,13 +51,36 @@ async def send_to_supabase(tx_data):
         print(f"❌ Failed to process transaction: {e}")
         print(f"Response details: {getattr(e, 'response', 'No response details')}")
 
+async def process_block(block_number):
+    """Process a single block by getting individual transactions"""
+    try:
+        # Get only block header first
+        block = w3.eth.get_block(block_number, full_transactions=False)
+        print(f"📦 Processing block: {block_number}")
+        
+        # Process transactions one by one
+        for tx_hash in block.transactions:
+            try:
+                # Get individual transaction
+                tx = w3.eth.get_transaction(tx_hash)
+                if tx and tx.value and tx.value >= TRANSFER_THRESHOLD:
+                    await process_transaction(tx, block_number)
+            except Exception as e:
+                print(f"⚠️ Transaction error ({tx_hash.hex()[:10]}...): {str(e)}")
+                continue
+                
+    except Exception as e:
+        print(f"⚠️ Block processing error: {str(e)}")
+
 async def listen_to_blocks():
     print("🚀 Starting blockchain listener...")
+    retry_delay = 5
+    
     while True:
         try:
             if not w3.is_connected():
                 print("⚠️ Reconnecting to Monad node...")
-                await asyncio.sleep(5)
+                await asyncio.sleep(retry_delay)
                 continue
 
             current_block = w3.eth.block_number
@@ -68,34 +89,18 @@ async def listen_to_blocks():
                     latest_block = w3.eth.block_number
                     if latest_block > current_block:
                         for block_number in range(current_block + 1, latest_block + 1):
-                            try:
-                                print(f"📦 Processing block: {block_number}")
-                                block = w3.eth.get_block(block_number, full_transactions=False)
-                                
-                                # Get transactions in chunks
-                                for tx_hash in block.transactions:
-                                    try:
-                                        tx = w3.eth.get_transaction(tx_hash)
-                                        if tx and tx.value and tx.value >= TRANSFER_THRESHOLD:
-                                            await process_transaction(tx, block_number)
-                                    except Exception as e:
-                                        print(f"⚠️ Error processing transaction {tx_hash}: {e}")
-                                        continue
-                                
-                            except Exception as e:
-                                print(f"⚠️ Error processing block {block_number}: {e}")
-                                continue
-                        
+                            await process_block(block_number)
                         current_block = latest_block
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(1)
                 
                 except (TimeoutError, ProviderConnectionError) as e:
-                    print(f"⚠️ Connection error: {e}")
+                    print(f"⚠️ Connection error: {str(e)}")
+                    await asyncio.sleep(retry_delay)
                     break
-                
+                    
         except Exception as e:
-            print(f"❌ Critical error: {e}")
-            await asyncio.sleep(5)
+            print(f"❌ Critical error: {str(e)}")
+            await asyncio.sleep(retry_delay)
 
 async def process_transaction(tx, block_number):
     tx_hash = tx.hash.hex()

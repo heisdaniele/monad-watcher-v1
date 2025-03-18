@@ -6,14 +6,21 @@ class TransactionCache:
         self.redis = redis.Redis(
             host=REDIS_HOST,
             port=REDIS_PORT,
+            socket_timeout=5,
+            retry_on_timeout=True,
             decode_responses=True
         )
         self.ttl = REDIS_TTL
         
     async def is_processed(self, tx_hash: str) -> bool:
-        """Check if transaction has been processed"""
-        return bool(self.redis.exists(f"tx:{tx_hash}"))
+        try:
+            return bool(self.redis.exists(f"tx:{tx_hash}"))
+        except redis.ConnectionError:
+            print("⚠️ Redis connection failed, skipping cache check")
+            return False
         
     async def mark_processed(self, tx_hash: str):
-        """Mark transaction as processed"""
-        self.redis.set(f"tx:{tx_hash}", "1", ex=self.ttl)
+        try:
+            self.redis.set(f"tx:{tx_hash}", "1", ex=self.ttl)
+        except redis.ConnectionError:
+            print("⚠️ Redis connection failed, skipping cache update")
