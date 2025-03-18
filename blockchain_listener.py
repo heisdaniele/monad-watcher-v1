@@ -1,17 +1,38 @@
 import asyncio
 from web3 import Web3
-from config import NODE_URL, TRANSFER_THRESHOLD
-from telegram_notifier import send_telegram_notification
-from website_notifier import send_to_website
+from supabase import create_client
+from config import NODE_URL, TRANSFER_THRESHOLD, SUPABASE_URL, SUPABASE_SERVICE_KEY
 
-# Create a Web3 instance using the WebsocketProvider
-w3 = Web3(Web3.WebsocketProvider(NODE_URL))
+# Initialize Supabase client
+supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+# Create Web3 instance using the LegacyWebSocketProvider.
+w3 = Web3(Web3.LegacyWebSocketProvider(NODE_URL))
 
 # Set to track processed transactions to avoid duplicates.
 processed_tx_hashes = set()
 
 # Define token conversion: 1 MON = 10^18 units.
 MON_DECIMALS = 10 ** 18
+
+async def send_to_supabase(tx_data):
+    """
+    Sends a transaction record to Supabase's 'transfers' table.
+    """
+    try:
+        formatted_data = {
+            "tx_hash": tx_data["tx_hash"],
+            "from_addr": tx_data["from_addr"],
+            "to_addr": tx_data["to_addr"],
+            "amount": float(tx_data["amount"]),
+            "block_number": tx_data["blockNumber"]
+        }
+        # Insert data into Supabase
+        response = supabase.table('transfers').insert(formatted_data).execute()
+        print(f"✅ Transaction saved: {tx_data['tx_hash'][:10]}... ({tx_data['amount']} MON)")
+    except Exception as e:
+        print(f"❌ Failed to save transaction: {e}")
+        print(f"Response details: {getattr(e, 'response', 'No response details')}")
 
 async def listen_to_blocks():
     print("Starting blockchain listener...")
@@ -32,7 +53,6 @@ async def listen_to_blocks():
 
 async def process_block(block):
     for tx in block.transactions:
-        # Process only transactions that exceed the threshold.
         if tx.value and tx.value >= TRANSFER_THRESHOLD:
             tx_hash = tx.hash.hex()
             if tx_hash in processed_tx_hashes:
@@ -46,8 +66,8 @@ async def process_block(block):
                 "amount": f"{human_amount:.2f}",
                 "blockNumber": block.number,
             }
-            print("Large transfer detected:", tx_data)
-            await send_to_website(tx_data)
+            print(f"Large transfer detected: {human_amount:.2f} MON")
+            await send_to_supabase(tx_data)
 
 if __name__ == "__main__":
     asyncio.run(listen_to_blocks())

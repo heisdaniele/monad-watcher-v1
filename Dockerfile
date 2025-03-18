@@ -11,12 +11,17 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Install Python packages
+# Install Python packages - separate layer for better caching
 COPY requirements.txt .
-RUN python -m pip install --upgrade pip && \
+RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir wheel setuptools && \
     pip install --no-cache-dir -r requirements.txt
 
+# Copy application code
 COPY . .
 
+# Set Python to run in unbuffered mode
+ENV PYTHONUNBUFFERED=1
+
+# Run the blockchain listener
 CMD ["python", "blockchain_listener.py"]
