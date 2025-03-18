@@ -27,3 +27,24 @@ WEBSITE_ENDPOINT=your_endpoint_here
 ```bash
 python blockchain_listener.py
 ```
+
+## Docker Deployment
+
+Build and run with Docker:
+
+```bash
+# Build the image
+docker build -t monad-watcher .
+
+# Run the container
+docker run -d \
+  --name monad-watcher \
+  --env-file .env \
+  monad-watcher
+```
+
+Or using docker-compose:
+
+```bash
+docker-compose up -d
+```

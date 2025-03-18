@@ -4,8 +4,8 @@ from config import NODE_URL, TRANSFER_THRESHOLD
 from telegram_notifier import send_telegram_notification
 from website_notifier import send_to_website
 
-# Create a Web3 instance using the LegacyWebSocketProvider.
-w3 = Web3(Web3.LegacyWebSocketProvider(NODE_URL))
+# Create a Web3 instance using the WebsocketProvider
+w3 = Web3(Web3.WebsocketProvider(NODE_URL))
 
 # Set to track processed transactions to avoid duplicates.
 processed_tx_hashes = set()
