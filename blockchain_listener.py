@@ -5,7 +5,7 @@ from web3.exceptions import ProviderConnectionError
 from supabase import create_client
 from config import NODE_URL, TRANSFER_THRESHOLD, SUPABASE_URL, SUPABASE_SERVICE_KEY
 
-# Configure logging
+# Configure logging with timestamp
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -20,32 +20,38 @@ w3 = Web3(Web3.LegacyWebSocketProvider(
     NODE_URL,
     websocket_kwargs={
         'max_size': 100_000_000,  # 100MB for large blocks
-        'ping_interval': 30,      # Keep connection alive
-        'ping_timeout': 15,       # Shorter timeout for quicker recovery
-        'close_timeout': 10       # Quick closure on issues
+        'ping_interval': 15,      # Reduced interval for better connection
+        'ping_timeout': 10,       # Shorter timeout for quicker recovery
+        'close_timeout': 5,       # Quick closure for reconnection
     }
 ))
 
-# Rate limiting for QuickNode (15 req/sec free tier)
-REQUESTS_PER_SECOND = 15
+# Rate limiting for QuickNode
+REQUESTS_PER_SECOND = 10  # Conservative rate limit
 REQUEST_COOLDOWN = 1 / REQUESTS_PER_SECOND
 MON_DECIMALS = 10 ** 18
 
 async def check_sync_status():
-    """Monitor block sync status"""
+    """Monitor block sync status with enhanced error handling"""
     try:
+        if not w3.is_connected():
+            logger.error("❌ Not connected to QuickNode")
+            return None, None
+            
         current = w3.eth.block_number
         await asyncio.sleep(REQUEST_COOLDOWN)
         
-        # Get latest block from QuickNode
         latest = w3.eth.block_number
         await asyncio.sleep(REQUEST_COOLDOWN)
         
-        if latest - current > 10:  # If more than 10 blocks behind
+        if latest - current > 10:
             logger.warning(f"⚠️ Behind by {latest - current} blocks")
         return current, latest
+    except ProviderConnectionError as e:
+        logger.error(f"❌ QuickNode connection error: {str(e)}")
+        return None, None
     except Exception as e:
-        logger.error(f"❌ Sync check failed: {e}")
+        logger.error(f"❌ Sync check failed: {str(e)}")
         return None, None
 
 async def send_to_supabase(tx_data):
