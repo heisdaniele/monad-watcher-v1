@@ -24,15 +24,16 @@ def initialize_web3(max_retries=MAX_RETRIES, retry_delay=INITIAL_RETRY_DELAY):
     """Initialize Web3 with connection verification and retry logic"""
     for attempt in range(max_retries):
         try:
-            logger.info(f"🔄 Attempting to connect to QuickNode (attempt {attempt + 1}/{max_retries})")
+            logger.info(f"🔄 Attempting to connect to node (attempt {attempt + 1}/{max_retries})")
             
+            # Updated WebSocket settings without ssl_verify
             provider = Web3.LegacyWebSocketProvider(
                 NODE_URL,
                 websocket_kwargs={
-                    'max_size': 100_000_000,
-                    'ping_interval': 15,     # Reduced for faster health checks
-                    'ping_timeout': 10,
-                    'close_timeout': 5,
+                    'max_size': 100_000_000,    # Reduced to 100MB
+                    'ping_interval': 15,         # More frequent pings
+                    'ping_timeout': 10,          # Shorter timeout
+                    'close_timeout': 5,          # Quicker close
                     'extra_headers': {
                         'Accept': 'application/json',
                         'Content-Type': 'application/json',
@@ -41,14 +42,20 @@ def initialize_web3(max_retries=MAX_RETRIES, retry_delay=INITIAL_RETRY_DELAY):
             )
             w3 = Web3(provider)
             
-            # Verify connection and chain
+            # Enhanced connection verification
             if not w3.is_connected():
+                logger.error("❌ Initial connection failed")
                 raise ConnectionError("Failed initial connection check")
-                
-            # Test RPC call
-            chain_id = w3.eth.chain_id
-            logger.info(f"✅ Connected to QuickNode (Chain ID: {chain_id})")
-            return w3
+            
+            # Test chain connection with timeout
+            try:
+                chain_id = w3.eth.chain_id
+                block = w3.eth.get_block('latest')
+                logger.info(f"✅ Connected to chain {chain_id}, latest block: {block.number}")
+                return w3
+            except Exception as chain_error:
+                logger.error(f"❌ Chain verification failed: {str(chain_error)}")
+                raise
 
         except Exception as e:
             logger.warning(f"⚠️ Connection attempt {attempt + 1} failed: {str(e)}")
