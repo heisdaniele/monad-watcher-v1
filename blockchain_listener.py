@@ -15,16 +15,44 @@ logger = logging.getLogger(__name__)
 # Initialize Supabase client
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-# Create Web3 instance with QuickNode optimized settings
-w3 = Web3(Web3.LegacyWebSocketProvider(
-    NODE_URL,
-    websocket_kwargs={
-        'max_size': 100_000_000,  # 100MB for large blocks
-        'ping_interval': 15,      # Reduced interval for better connection
-        'ping_timeout': 10,       # Shorter timeout for quicker recovery
-        'close_timeout': 5,       # Quick closure for reconnection
-    }
-))
+# Initialize Web3 with robust WebSocket settings
+def initialize_web3():
+    """Initialize Web3 with connection verification"""
+    try:
+        provider = Web3.LegacyWebSocketProvider(
+            NODE_URL,
+            websocket_kwargs={
+                'max_size': 100_000_000,
+                'ping_interval': 30,
+                'ping_timeout': 20,
+                'close_timeout': 10,
+                # Add authentication headers
+                'extra_headers': {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                }
+            }
+        )
+        w3 = Web3(provider)
+        
+        # Verify connection
+        if not w3.is_connected():
+            logger.error("❌ Failed to connect to QuickNode")
+            return None
+            
+        # Test a simple RPC call
+        w3.eth.chain_id
+        logger.info("✅ Successfully connected to QuickNode")
+        return w3
+    except Exception as e:
+        logger.error(f"❌ QuickNode initialization error: {str(e)}")
+        return None
+
+# Initialize Web3 instance
+w3 = initialize_web3()
+if not w3:
+    logger.error("❌ Could not initialize Web3, check your QuickNode URL and subscription")
+    raise ConnectionError("Failed to connect to QuickNode")
 
 # Rate limiting for QuickNode
 REQUESTS_PER_SECOND = 10  # Conservative rate limit
