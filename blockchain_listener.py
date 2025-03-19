@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from web3 import Web3
 from web3.exceptions import ProviderConnectionError
 from supabase import create_client
@@ -15,44 +16,55 @@ logger = logging.getLogger(__name__)
 # Initialize Supabase client
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-# Initialize Web3 with robust WebSocket settings
-def initialize_web3():
-    """Initialize Web3 with connection verification"""
-    try:
-        provider = Web3.LegacyWebSocketProvider(
-            NODE_URL,
-            websocket_kwargs={
-                'max_size': 100_000_000,
-                'ping_interval': 30,
-                'ping_timeout': 20,
-                'close_timeout': 10,
-                # Add authentication headers
-                'extra_headers': {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                }
-            }
-        )
-        w3 = Web3(provider)
-        
-        # Verify connection
-        if not w3.is_connected():
-            logger.error("❌ Failed to connect to QuickNode")
-            return None
-            
-        # Test a simple RPC call
-        w3.eth.chain_id
-        logger.info("✅ Successfully connected to QuickNode")
-        return w3
-    except Exception as e:
-        logger.error(f"❌ QuickNode initialization error: {str(e)}")
-        return None
+# Add retry configuration
+MAX_RETRIES = 5
+INITIAL_RETRY_DELAY = 1
 
-# Initialize Web3 instance
+def initialize_web3(max_retries=MAX_RETRIES, retry_delay=INITIAL_RETRY_DELAY):
+    """Initialize Web3 with connection verification and retry logic"""
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"🔄 Attempting to connect to QuickNode (attempt {attempt + 1}/{max_retries})")
+            
+            provider = Web3.LegacyWebSocketProvider(
+                NODE_URL,
+                websocket_kwargs={
+                    'max_size': 100_000_000,
+                    'ping_interval': 15,     # Reduced for faster health checks
+                    'ping_timeout': 10,
+                    'close_timeout': 5,
+                    'extra_headers': {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                    }
+                }
+            )
+            w3 = Web3(provider)
+            
+            # Verify connection and chain
+            if not w3.is_connected():
+                raise ConnectionError("Failed initial connection check")
+                
+            # Test RPC call
+            chain_id = w3.eth.chain_id
+            logger.info(f"✅ Connected to QuickNode (Chain ID: {chain_id})")
+            return w3
+
+        except Exception as e:
+            logger.warning(f"⚠️ Connection attempt {attempt + 1} failed: {str(e)}")
+            if attempt < max_retries - 1:
+                sleep_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                logger.info(f"😴 Waiting {sleep_time} seconds before retry...")
+                time.sleep(sleep_time)
+            else:
+                logger.error("❌ All connection attempts failed")
+                return None
+
+# Initialize Web3 with retries
 w3 = initialize_web3()
 if not w3:
-    logger.error("❌ Could not initialize Web3, check your QuickNode URL and subscription")
-    raise ConnectionError("Failed to connect to QuickNode")
+    logger.error("❌ Could not establish connection to QuickNode after multiple attempts")
+    raise ConnectionError("Failed to connect to QuickNode after exhausting retries")
 
 # Rate limiting for QuickNode
 REQUESTS_PER_SECOND = 10  # Conservative rate limit
