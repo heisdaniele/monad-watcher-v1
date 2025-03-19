@@ -1,32 +1,55 @@
 import asyncio
+import logging
 from web3 import Web3
 from web3.exceptions import ProviderConnectionError
 from supabase import create_client
 from config import NODE_URL, TRANSFER_THRESHOLD, SUPABASE_URL, SUPABASE_SERVICE_KEY
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # Initialize Supabase client
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-# Create Web3 instance with optimized settings
+# Create Web3 instance with QuickNode optimized settings
 w3 = Web3(Web3.LegacyWebSocketProvider(
     NODE_URL,
     websocket_kwargs={
-        'max_size': 100_000_000,  # 100MB
-        'ping_interval': 30,
-        'ping_timeout': 20,
-        'close_timeout': 20
+        'max_size': 100_000_000,  # 100MB for large blocks
+        'ping_interval': 30,      # Keep connection alive
+        'ping_timeout': 15,       # Shorter timeout for quicker recovery
+        'close_timeout': 10       # Quick closure on issues
     }
 ))
 
-# Rate limiting settings
-REQUESTS_PER_SECOND = 20  # Keep below 25/s limit
+# Rate limiting for QuickNode (15 req/sec free tier)
+REQUESTS_PER_SECOND = 15
 REQUEST_COOLDOWN = 1 / REQUESTS_PER_SECOND
-
-# Define token conversion
 MON_DECIMALS = 10 ** 18
 
+async def check_sync_status():
+    """Monitor block sync status"""
+    try:
+        current = w3.eth.block_number
+        await asyncio.sleep(REQUEST_COOLDOWN)
+        
+        # Get latest block from QuickNode
+        latest = w3.eth.block_number
+        await asyncio.sleep(REQUEST_COOLDOWN)
+        
+        if latest - current > 10:  # If more than 10 blocks behind
+            logger.warning(f"⚠️ Behind by {latest - current} blocks")
+        return current, latest
+    except Exception as e:
+        logger.error(f"❌ Sync check failed: {e}")
+        return None, None
+
 async def send_to_supabase(tx_data):
-    """Send transaction to Supabase with upsert for deduplication"""
+    """Send transaction with upsert for deduplication"""
     try:
         formatted_data = {
             "tx_hash": tx_data["tx_hash"],
@@ -40,70 +63,53 @@ async def send_to_supabase(tx_data):
                           on_conflict='tx_hash',
                           ignore_duplicates=True)
                    .execute())
-        print(f"✅ Transaction processed: {tx_data['tx_hash'][:10]}... ({tx_data['amount']} MON)")
+        logger.info(f"✅ Transaction saved: {tx_data['tx_hash'][:10]}... ({tx_data['amount']} MON)")
     except Exception as e:
-        print(f"❌ Failed to process transaction: {e}")
+        logger.error(f"❌ Supabase error: {e}")
 
 async def process_block(block_number):
-    """Process a single block with rate limiting"""
+    """Process single block with rate limiting"""
     try:
-        print(f"📦 Processing block: {block_number}")
+        block = w3.eth.get_block(block_number, full_transactions=True)
+        await asyncio.sleep(REQUEST_COOLDOWN)
         
-        # Get block with just transaction hashes first
-        block = w3.eth.get_block(block_number, full_transactions=False)
-        await asyncio.sleep(REQUEST_COOLDOWN)  # Rate limiting
+        logger.info(f"📦 Processing block: {block_number}")
         
-        # Process transactions one by one with rate limiting
-        for tx_hash in block.transactions:
-            try:
-                await asyncio.sleep(REQUEST_COOLDOWN)  # Rate limiting
-                tx = w3.eth.get_transaction(tx_hash)
-                if tx and tx.value and tx.value >= TRANSFER_THRESHOLD:
-                    await process_transaction(tx, block_number)
-            except Exception as e:
-                if "request limit reached" in str(e):
-                    print(f"🔄 Rate limit hit, cooling down...")
-                    await asyncio.sleep(5)  # Longer cooldown on rate limit
-                    continue
-                print(f"⚠️ Transaction error ({tx_hash.hex()[:10]}...): {str(e)}")
-                continue
-                
+        for tx in block.transactions:
+            if tx.value and tx.value >= TRANSFER_THRESHOLD:
+                await process_transaction(tx, block_number)
+                await asyncio.sleep(REQUEST_COOLDOWN)
     except Exception as e:
-        print(f"⚠️ Block processing error: {str(e)}")
-        await asyncio.sleep(1)
+        logger.error(f"❌ Block {block_number} error: {e}")
 
 async def listen_to_blocks():
-    print("🚀 Starting blockchain listener...")
+    """Main loop with sync monitoring"""
+    logger.info("🚀 Starting blockchain listener with QuickNode...")
     retry_delay = 5
     
     while True:
         try:
-            if not w3.is_connected():
-                print("⚠️ Reconnecting to Monad node...")
+            current_block, latest_block = await check_sync_status()
+            if not current_block:
                 await asyncio.sleep(retry_delay)
                 continue
-
-            current_block = w3.eth.block_number
-            await asyncio.sleep(REQUEST_COOLDOWN)  # Rate limiting
-            
+                
             while True:
                 try:
-                    await asyncio.sleep(REQUEST_COOLDOWN)  # Rate limiting
-                    latest_block = w3.eth.block_number
-                    if latest_block > current_block:
-                        for block_number in range(current_block + 1, latest_block + 1):
-                            await process_block(block_number)
-                            await asyncio.sleep(REQUEST_COOLDOWN)  # Rate limiting
-                        current_block = latest_block
-                    await asyncio.sleep(1)
-                
+                    for block_number in range(current_block + 1, latest_block + 1):
+                        await process_block(block_number)
+                    current_block = latest_block
+                    
+                    # Check sync status periodically
+                    await asyncio.sleep(5)
+                    current_block, latest_block = await check_sync_status()
+                    
                 except (TimeoutError, ProviderConnectionError) as e:
-                    print(f"⚠️ Connection error: {str(e)}")
+                    logger.error(f"⚠️ Connection error: {e}")
                     await asyncio.sleep(retry_delay)
                     break
-                    
         except Exception as e:
-            print(f"❌ Critical error: {str(e)}")
+            logger.error(f"❌ Critical error: {e}")
             await asyncio.sleep(retry_delay)
 
 async def process_transaction(tx, block_number):
@@ -119,7 +125,7 @@ async def process_transaction(tx, block_number):
         "blockNumber": block_number,
     }
     
-    print(f"💰 Large transfer detected: {human_amount:.2f} MON")
+    logger.info(f"💰 Large transfer detected: {human_amount:.2f} MON")
     await send_to_supabase(tx_data)
 
 if __name__ == "__main__":
